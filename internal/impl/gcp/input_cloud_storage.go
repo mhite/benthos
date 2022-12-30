@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"cloud.google.com/go/pubsub"
 	"cloud.google.com/go/storage"
 	"google.golang.org/api/iterator"
 
@@ -25,11 +26,19 @@ import (
 
 func init() {
 	err := bundle.AllInputs.Add(processors.WrapConstructor(func(c input.Config, nm bundle.NewManagement) (input.Streamed, error) {
-		r, err := newGCPCloudStorageInput(c.GCPCloudStorage, nm.Logger(), nm.Metrics())
+		var rdr input.Async
+		var err error
+		rdr, err = newGCPCloudStorageInput(c.GCPCloudStorage, nm.Logger(), nm.Metrics())
 		if err != nil {
 			return nil, err
 		}
-		return input.NewAsyncReader("gcp_cloud_storage", true, input.NewAsyncPreserver(r), nm)
+		// If we're not pulling events directly from a Pub/Sub subscription
+		// then there's no concept of propagating nacks upstreams, therefore
+		// wrap our reader within a preserver in order to retry indefinitely.
+		if c.GCPCloudStorage.PubSub.Subscription == "" {
+			rdr = input.NewAsyncPreserver(rdr)
+		}
+		return input.NewAsyncReader("gcp_cloud_storage", true, rdr, nm)
 	}), docs.ComponentSpec{
 		Name:       "gcp_cloud_storage",
 		Type:       docs.TypeInput,
@@ -64,6 +73,10 @@ You can access these metadata fields using [function interpolation](/docs/config
 By default Benthos will use a shared credentials file when connecting to GCP
 services. You can find out more [in this document](/docs/guides/cloud/gcp).`,
 		Config: docs.FieldComponent().WithChildren(
+			docs.FieldObject("pubsub", "Consume Pub/Sub messages in order to trigger key downloads.").WithChildren(
+				docs.FieldString("project", "The project ID of the target subscription."),
+				docs.FieldString("subscription", "The target subscription ID."),
+			),
 			docs.FieldString("bucket", "The name of the bucket from which to download objects."),
 			docs.FieldString("prefix", "An optional path prefix, if set only objects with the prefix are consumed."),
 			codec.ReaderDocs,
@@ -203,7 +216,8 @@ type gcpCloudStorageInput struct {
 	objectMut sync.Mutex
 	object    *gcpCloudStoragePendingObject
 
-	client *storage.Client
+	storageClient *storage.Client
+	pubsubClient  *pubsub.Client
 
 	log   log.Modular
 	stats metrics.Type
@@ -231,12 +245,12 @@ func newGCPCloudStorageInput(conf input.GCPCloudStorageConfig, log log.Modular, 
 // Cloud Storage bucket.
 func (g *gcpCloudStorageInput) Connect(ctx context.Context) error {
 	var err error
-	g.client, err = storage.NewClient(context.Background())
+	g.storageClient, err = storage.NewClient(context.Background())
 	if err != nil {
 		return err
 	}
 
-	g.keyReader, err = newGCPCloudStorageTargetReader(ctx, g.conf, g.log, g.client.Bucket(g.conf.Bucket))
+	g.keyReader, err = newGCPCloudStorageTargetReader(ctx, g.conf, g.log, g.storageClient.Bucket(g.conf.Bucket))
 	return err
 }
 
@@ -250,7 +264,7 @@ func (g *gcpCloudStorageInput) getObjectTarget(ctx context.Context) (*gcpCloudSt
 		return nil, err
 	}
 
-	objReference := g.client.Bucket(g.conf.Bucket).Object(target.key)
+	objReference := g.storageClient.Bucket(g.conf.Bucket).Object(target.key)
 
 	objAttributes, err := objReference.Attrs(ctx)
 	if err != nil {
@@ -355,9 +369,9 @@ func (g *gcpCloudStorageInput) Close(ctx context.Context) (err error) {
 		g.object = nil
 	}
 
-	if err == nil && g.client != nil {
-		err = g.client.Close()
-		g.client = nil
+	if err == nil && g.storageClient != nil {
+		err = g.storageClient.Close()
+		g.storageClient = nil
 	}
 	return
 }

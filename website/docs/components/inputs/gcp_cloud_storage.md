@@ -36,6 +36,9 @@ Introduced in version 3.43.0.
 input:
   label: ""
   gcp_cloud_storage:
+    pubsub:
+      project: ""
+      subscription: ""
     bucket: ""
     prefix: ""
     codec: all-bytes
@@ -49,6 +52,9 @@ input:
 input:
   label: ""
   gcp_cloud_storage:
+    pubsub:
+      project: ""
+      subscription: ""
     bucket: ""
     prefix: ""
     codec: all-bytes
@@ -84,6 +90,27 @@ By default Benthos will use a shared credentials file when connecting to GCP
 services. You can find out more [in this document](/docs/guides/cloud/gcp).
 
 ## Fields
+
+### `pubsub`
+
+Consume Pub/Sub messages in order to trigger key downloads.
+
+
+Type: `object`  
+
+### `pubsub.project`
+
+The project ID of the target subscription.
+
+
+Type: `string`  
+
+### `pubsub.subscription`
+
+The target subscription ID.
+
+
+Type: `string`  
 
 ### `bucket`
 
