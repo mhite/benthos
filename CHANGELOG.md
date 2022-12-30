@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+### Added
+
+- Format `csv:x` added to the `unarchive` processor.
+- Field `max_buffer` added to the `aws_s3` input.
+
+### Fixed
+
+- The `sqlite` buffer should no longer print `Failed to ack buffer message` logs during graceful termination.
+
 ## 4.11.0 - 2022-12-21
 
 ### Added

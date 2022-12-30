@@ -38,7 +38,7 @@ func init() {
 		if c.GCPCloudStorage.PubSub.Subscription == "" {
 			rdr = input.NewAsyncPreserver(rdr)
 		}
-		return input.NewAsyncReader("gcp_cloud_storage", true, rdr, nm)
+		return input.NewAsyncReader("gcp_cloud_storage", rdr, nm)
 	}), docs.ComponentSpec{
 		Name:       "gcp_cloud_storage",
 		Type:       docs.TypeInput,
