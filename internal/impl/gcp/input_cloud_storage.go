@@ -291,6 +291,7 @@ func (ps *pubsubTargetReader) parseObjectPath(pubsubMsgAttributes map[string]str
 	}
 	// TODO: GCS FUSE likes to touch a file and write to it. This creates two OBJECT_FINALIZE
 	// events, the first one with a 0 byte file. Figure out how to handle this.
+	// I think maybe S3 input handles similar with sqs.delay_period feature?
 	bucketId, ok := pubsubMsgAttributes["bucketId"]
 	if !ok {
 		return nil, errors.New("Pub/Sub message missing bucketId attribute")
@@ -311,7 +312,7 @@ func (ps *pubsubTargetReader) readPubsubEvents(ctx context.Context) ([]*gcpCloud
 	select {
 	case gmsg := <-ps.msgsChan:
 		output = append(output, gmsg)
-		ps.log.Debugf("found a thing = %v", gmsg)
+		ps.log.Debugf("received msg on pub/sub channel = %v", gmsg)
 	default:
 	}
 
@@ -429,18 +430,32 @@ func (g *gcpCloudStorageInput) Connect(ctx context.Context) error {
 
 		sub := g.pubsubClient.Subscription(g.conf.PubSub.Subscription)
 
+		// TODO: why create new context? should we just use ctx?
 		subCtx, cancel := context.WithCancel(context.Background())
+		// TODO: should the channel buffer size be configurable?
+		// TODO: Does channel size create natural back pressure on Google side? In other
+		// words, the call-back we pass to sub.Receive would block on channel send
+		// until there is buffer available. Maybe it eventually results in disconnects by
+		// Google?
+		// Probably not a good idea? Maybe this should be operated in synchronous mode instead?
+		// sub.ReceiveSettings.Synchronous = true
+		// sub.ReceiveSettings.MaxOutstandingMessages = 10
 		msgsChan := make(chan *pubsub.Message, 1)
 
 		g.subscription = sub
 		g.msgsChan = msgsChan
 		g.closeFunc = cancel
 
+		// launch goroutine to receive streaming messages from pub/sub
 		go func() {
+			g.log.Debugln("entering pub/sub receiver goroutine")
 			rerr := sub.Receive(subCtx, func(ctx context.Context, m *pubsub.Message) {
+				g.log.Debugf("received pub/sub msg inside receiver goroutine. m = %v\n", m)
 				select {
 				case msgsChan <- m:
+					g.log.Debugf("sending pub/sub msg into message channel inside receiver goroutine. m = %v\n", m)
 				case <-ctx.Done():
+					g.log.Debugf("cancel received, abandoning pub/sub message inside receiver goroutine. m = %v\n", m)
 					if m != nil {
 						m.Nack()
 					}
@@ -455,6 +470,7 @@ func (g *gcpCloudStorageInput) Connect(ctx context.Context) error {
 			g.msgsChan = nil
 			g.closeFunc = nil
 			g.subMut.Unlock()
+			g.log.Debugf("exiting pub/sub receiver goroutine")
 		}()
 	}
 	if g.keyReader, err = g.getTargetReader(ctx); err != nil {
