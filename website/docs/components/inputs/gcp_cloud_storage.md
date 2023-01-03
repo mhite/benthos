@@ -19,7 +19,7 @@ import TabItem from '@theme/TabItem';
 This component is mostly stable but breaking changes could still be made outside of major version releases if a fundamental problem with the component is found.
 :::
 
-Downloads objects within a Google Cloud Storage bucket, optionally filtered by a prefix.
+Downloads objects within a Google Cloud Storage bucket, optionally filtered by a prefix, either by walking the items in the bucket or by streaming upload notifications in realtime.
 
 Introduced in version 3.43.0.
 
@@ -39,6 +39,9 @@ input:
     pubsub:
       project: ""
       subscription: ""
+      sync: false
+      max_outstanding_messages: 1000
+      max_outstanding_bytes: 1000000000
     bucket: ""
     prefix: ""
     codec: all-bytes
@@ -55,6 +58,9 @@ input:
     pubsub:
       project: ""
       subscription: ""
+      sync: false
+      max_outstanding_messages: 1000
+      max_outstanding_bytes: 1000000000
     bucket: ""
     prefix: ""
     codec: all-bytes
@@ -63,6 +69,14 @@ input:
 
 </TabItem>
 </Tabs>
+
+## Streaming Objects on Upload with Pub/Sub
+
+A common pattern for consuming GCS objects is to configure a bucket to emit upload notification events to a Pub/Sub topic with an associated subscription. A consumer then subscribes to this subscription and newly uploaded objects are then downloaded as notification events are published to the subscription. More information about this pattern and how to set it up can be found at: https://cloud.google.com/storage/docs/pubsub-notifications.
+
+Benthos is able to follow this pattern when you configure `pubsub.project` and `pubsub.subscription`, where it consumes events from Pub/Sub and only downloads object keys received within those events.
+
+When using Pub/Sub please make sure you have sensible values for `pubsub.max_outstanding_messages` and also the acknowledgement deadline of the subscription itself. When Benthos consumes a GCS object the Pub/Sub message that triggered it is not acknowledged until the GCS object has been sent onwards. This ensures at-least-once crash resiliency, but also means that if the GCS object takes longer to process than the acknowledgement deadline of your subscription then the same objects might be processed multiple times.
 
 ## Downloading Large Files
 
@@ -104,6 +118,7 @@ The project ID of the target subscription.
 
 
 Type: `string`  
+Default: `""`  
 
 ### `pubsub.subscription`
 
@@ -111,6 +126,31 @@ The target subscription ID.
 
 
 Type: `string`  
+Default: `""`  
+
+### `pubsub.sync`
+
+Enable synchronous pull mode.
+
+
+Type: `bool`  
+Default: `false`  
+
+### `pubsub.max_outstanding_messages`
+
+The maximum number of outstanding pending messages to be consumed at a given time.
+
+
+Type: `int`  
+Default: `1000`  
+
+### `pubsub.max_outstanding_bytes`
+
+The maximum number of outstanding pending messages to be consumed measured in bytes.
+
+
+Type: `int`  
+Default: `1000000000`  
 
 ### `bucket`
 

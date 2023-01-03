@@ -46,8 +46,16 @@ func init() {
 		Version:    "3.43.0",
 		Categories: []string{"Services", "GCP"},
 		Summary: `
-Downloads objects within a Google Cloud Storage bucket, optionally filtered by a prefix.`,
+Downloads objects within a Google Cloud Storage bucket, optionally filtered by a prefix, either by walking the items in the bucket or by streaming upload notifications in realtime.`,
 		Description: `
+## Streaming Objects on Upload with Pub/Sub
+
+A common pattern for consuming GCS objects is to configure a bucket to emit upload notification events to a Pub/Sub topic with an associated subscription. A consumer then subscribes to this subscription and newly uploaded objects are then downloaded as notification events are published to the subscription. More information about this pattern and how to set it up can be found at: https://cloud.google.com/storage/docs/pubsub-notifications.
+
+Benthos is able to follow this pattern when you configure ` + "`pubsub.project` and `pubsub.subscription`" + `, where it consumes events from Pub/Sub and only downloads object keys received within those events.
+
+When using Pub/Sub please make sure you have sensible values for ` + "`pubsub.max_outstanding_messages`" + ` and also the acknowledgement deadline of the subscription itself. When Benthos consumes a GCS object the Pub/Sub message that triggered it is not acknowledged until the GCS object has been sent onwards. This ensures at-least-once crash resiliency, but also means that if the GCS object takes longer to process than the acknowledgement deadline of your subscription then the same objects might be processed multiple times.
+
 ## Downloading Large Files
 
 When downloading large files it's often necessary to process it in streamed parts in order to avoid loading the entire file in memory at a given time. In order to do this a ` + "[`codec`](#codec)" + ` can be specified that determines how to break the input into smaller individual messages.
@@ -76,6 +84,9 @@ services. You can find out more [in this document](/docs/guides/cloud/gcp).`,
 			docs.FieldObject("pubsub", "Consume Pub/Sub messages in order to trigger key downloads.").WithChildren(
 				docs.FieldString("project", "The project ID of the target subscription."),
 				docs.FieldString("subscription", "The target subscription ID."),
+				docs.FieldBool("sync", "Enable synchronous pull mode."),
+				docs.FieldInt("max_outstanding_messages", "The maximum number of outstanding pending messages to be consumed at a given time."),
+				docs.FieldInt("max_outstanding_bytes", "The maximum number of outstanding pending messages to be consumed measured in bytes."),
 			),
 			docs.FieldString("bucket", "The name of the bucket from which to download objects."),
 			docs.FieldString("prefix", "An optional path prefix, if set only objects with the prefix are consumed."),
