@@ -440,6 +440,9 @@ func (g *gcpCloudStorageInput) Connect(ctx context.Context) error {
 		}
 
 		sub := g.pubsubClient.Subscription(g.conf.PubSub.Subscription)
+		sub.ReceiveSettings.MaxOutstandingMessages = g.conf.PubSub.MaxOutstandingMessages
+		sub.ReceiveSettings.MaxOutstandingBytes = g.conf.PubSub.MaxOutstandingBytes
+		sub.ReceiveSettings.Synchronous = g.conf.PubSub.Sync
 
 		// TODO: why create new context? should we just use ctx?
 		subCtx, cancel := context.WithCancel(context.Background())
