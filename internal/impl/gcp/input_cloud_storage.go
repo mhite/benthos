@@ -450,7 +450,7 @@ func (g *gcpCloudStorageInput) Connect(ctx context.Context) error {
 		go func() {
 			g.log.Debugln("entering pub/sub receiver goroutine")
 			rerr := sub.Receive(subCtx, func(ctx context.Context, m *pubsub.Message) {
-				g.log.Debugf("received pub/sub msg inside receiver goroutine. m = %v\n", m)
+				g.log.Debugf("received pub/sub msg inside receiver callback. m = %v\n", m)
 				select {
 				case msgsChan <- m:
 					g.log.Debugf("sending pub/sub msg into message channel inside receiver goroutine. m = %v\n", m)
@@ -460,6 +460,7 @@ func (g *gcpCloudStorageInput) Connect(ctx context.Context) error {
 						m.Nack()
 					}
 				}
+				g.log.Debugln("exiting pub/sub receiver callback")
 			})
 			if rerr != nil && rerr != context.Canceled {
 				g.log.Errorf("Subscription error: %v\n", rerr)

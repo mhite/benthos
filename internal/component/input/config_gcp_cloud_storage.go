@@ -2,15 +2,21 @@ package input
 
 // GCPGCSPubSubConfig contains configuration for hooking up the GCS input with a Pub/Sub subscription.
 type GCPGCSPubSubConfig struct {
-	Project      string `json:"project" yaml:"project"`
-	Subscription string `json:"subscription" yaml:"subscription"`
+	Project                string `json:"project" yaml:"project"`
+	Subscription           string `json:"subscription" yaml:"subscription"`
+	MaxOutstandingMessages int    `json:"max_outstanding_messages" yaml:"max_outstanding_messages"`
+	MaxOutstandingBytes    int    `json:"max_outstanding_bytes" yaml:"max_outstanding_bytes"`
+	Sync                   bool   `json:"sync" yaml:"sync"`
 }
 
 // NewGCPGCSPubSubConfig creates a new GCPGCSPubSubConfig with default values.
 func NewGCPGCSPubSubConfig() GCPGCSPubSubConfig {
 	return GCPGCSPubSubConfig{
-		Project:      "",
-		Subscription: "",
+		Project:                "",
+		Subscription:           "",
+		MaxOutstandingMessages: 1000, // pubsub.DefaultReceiveSettings.MaxOutstandingMessages
+		MaxOutstandingBytes:    1e9,  // pubsub.DefaultReceiveSettings.MaxOutstandingBytes (1G)
+		Sync:                   false,
 	}
 }
 
