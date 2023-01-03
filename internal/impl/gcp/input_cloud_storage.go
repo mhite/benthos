@@ -93,17 +93,23 @@ const (
 )
 
 type gcpCloudStorageObjectTarget struct {
-	key   string
-	ackFn func(context.Context, error) error
+	key    string
+	bucket string
+	ackFn  func(context.Context, error) error
 }
 
-func newGCPCloudStorageObjectTarget(key string, ackFn codec.ReaderAckFn) *gcpCloudStorageObjectTarget {
+func newGCPCloudStorageObjectTarget(key, bucket string, ackFn codec.ReaderAckFn) *gcpCloudStorageObjectTarget {
 	if ackFn == nil {
 		ackFn = func(context.Context, error) error {
 			return nil
 		}
 	}
-	return &gcpCloudStorageObjectTarget{key: key, ackFn: ackFn}
+	return &gcpCloudStorageObjectTarget{key: key, bucket: bucket, ackFn: ackFn}
+}
+
+type gcpCloudStorageObjectTargetReader interface {
+	Pop(ctx context.Context) (*gcpCloudStorageObjectTarget, error)
+	Close(ctx context.Context) error
 }
 
 //------------------------------------------------------------------------------
@@ -165,7 +171,7 @@ func newGCPCloudStorageTargetReader(
 		}
 
 		ackFn := deleteGCPCloudStorageObjectAckFn(bucket, obj.Name, conf.DeleteObjects, nil)
-		staticKeys.pending = append(staticKeys.pending, newGCPCloudStorageObjectTarget(obj.Name, ackFn))
+		staticKeys.pending = append(staticKeys.pending, newGCPCloudStorageObjectTarget(obj.Name, obj.Bucket, ackFn))
 	}
 
 	if len(staticKeys.pending) > 0 {
@@ -188,7 +194,7 @@ func (r *gcpCloudStorageTargetReader) Pop(ctx context.Context) (*gcpCloudStorage
 			}
 
 			ackFn := deleteGCPCloudStorageObjectAckFn(r.bucket, obj.Name, r.conf.DeleteObjects, nil)
-			r.pending = append(r.pending, newGCPCloudStorageObjectTarget(obj.Name, ackFn))
+			r.pending = append(r.pending, newGCPCloudStorageObjectTarget(obj.Name, obj.Bucket, ackFn))
 		}
 	}
 	if len(r.pending) == 0 {
@@ -205,13 +211,146 @@ func (r gcpCloudStorageTargetReader) Close(context.Context) error {
 
 //------------------------------------------------------------------------------
 
+type pubsubTargetReader struct {
+	conf     input.GCPCloudStorageConfig
+	log      log.Modular
+	msgsChan chan *pubsub.Message
+
+	nextRequest time.Time
+
+	pending []*gcpCloudStorageObjectTarget
+}
+
+func newPubsubTargetReader(
+	conf input.GCPCloudStorageConfig,
+	log log.Modular,
+	msgsChan chan *pubsub.Message,
+) *pubsubTargetReader {
+	return &pubsubTargetReader{conf: conf, log: log, msgsChan: msgsChan, nextRequest: time.Time{}, pending: nil}
+}
+
+func (ps *pubsubTargetReader) Pop(ctx context.Context) (*gcpCloudStorageObjectTarget, error) {
+	// TODO: figure out what "t" stands for -- is it "evenT?"
+	// we've got some events to pop off the stack, let's do one
+	if len(ps.pending) > 0 {
+		t := ps.pending[0]
+		ps.pending = ps.pending[1:]
+		return t, nil
+	}
+
+	// hang out until next pull interval or cancelled
+	if !ps.nextRequest.IsZero() {
+		if until := time.Until(ps.nextRequest); until > 0 {
+			select {
+			case <-time.After(until):
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		}
+	}
+
+	// go grab some events
+	var err error
+	if ps.pending, err = ps.readPubsubEvents(ctx); err != nil {
+		return nil, err
+	}
+	// if no events waiting, trying again in 500ms
+	// TODO: figure out why this is 500ms
+	// TODO: figure out why this is supposd to return an error
+	// I think the idea here is that if there isn't anything in last poll,
+	// we don't hammer the API?
+	if len(ps.pending) == 0 {
+		ps.nextRequest = time.Now().Add(time.Millisecond * 500)
+		return nil, component.ErrTimeout
+	}
+
+	ps.nextRequest = time.Time{}
+	t := ps.pending[0]
+	ps.pending = ps.pending[1:]
+	return t, nil
+}
+
+func (ps *pubsubTargetReader) Close(ctx context.Context) error {
+	// TODO: figure out -- I think this tries to NACK pending items?
+	var err error
+	for _, p := range ps.pending {
+		if aerr := p.ackFn(ctx, errors.New("service shutting down")); aerr != nil {
+			err = aerr
+		}
+	}
+	return err
+}
+
+func (ps *pubsubTargetReader) parseObjectPath(pubsubMsgAttributes map[string]string) (*gcpCloudStorageObjectTarget, error) {
+	eventType, ok := pubsubMsgAttributes["eventType"]
+	if !ok {
+		return nil, errors.New("Pub/Sub message missing eventType attribute")
+	}
+	if eventType != "OBJECT_FINALIZE" {
+		return nil, errors.New("Not an OBJECT_FINALIZE eventType")
+	}
+	bucketId, ok := pubsubMsgAttributes["bucketId"]
+	if !ok {
+		return nil, errors.New("Pub/Sub message missing bucketId attribute")
+	}
+	objectId, ok := pubsubMsgAttributes["objectId"]
+	if !ok {
+		return nil, errors.New("Pub/Sub message missing objectId attribute")
+	}
+
+	return &gcpCloudStorageObjectTarget{
+		bucket: bucketId,
+		key:    objectId,
+	}, nil
+}
+
+func (ps *pubsubTargetReader) readPubsubEvents(ctx context.Context) ([]*gcpCloudStorageObjectTarget, error) {
+	var output []*pubsub.Message
+	select {
+	case gmsg := <-ps.msgsChan:
+		output = append(output, gmsg)
+		ps.log.Debugf("found a thing = %v", gmsg)
+	default:
+	}
+
+	var pendingObjects []*gcpCloudStorageObjectTarget
+
+	// Discard any Pub/Sub messages not associated with a target file.
+
+	for _, pubsubMsg := range output {
+		object, err := ps.parseObjectPath(pubsubMsg.Attributes)
+		if err != nil {
+			ps.log.Errorf("Pub/Sub extract key error: %v\n", err)
+			continue
+		}
+		// TODO: figure out why are we using int32 specifically?
+		pendingObjects = append(pendingObjects, newGCPCloudStorageObjectTarget(object.key, object.bucket, nil))
+	}
+
+	return pendingObjects, nil
+}
+
+func (ps *pubsubTargetReader) nackPubsubMessage(ctx context.Context, msg *pubsub.Message) error {
+	_, err := msg.NackWithResult().Get(ctx)
+	// TODO: debug log the result?
+	return err
+}
+
+func (ps *pubsubTargetReader) ackPubsubMessage(ctx context.Context, msg *pubsub.Message) error {
+	_, err := msg.AckWithResult().Get(ctx)
+	// TODO: debug log the result?
+	return err
+}
+
+//------------------------------------------------------------------------------
+
 // gcpCloudStorage is a benthos reader.Type implementation that reads messages
 // from a Google Cloud Storage bucket.
 type gcpCloudStorageInput struct {
 	conf input.GCPCloudStorageConfig
 
 	objectScannerCtor codec.ReaderConstructor
-	keyReader         *gcpCloudStorageTargetReader
+	keyReader         gcpCloudStorageObjectTargetReader
 
 	objectMut sync.Mutex
 	object    *gcpCloudStoragePendingObject
@@ -219,12 +358,27 @@ type gcpCloudStorageInput struct {
 	storageClient *storage.Client
 	pubsubClient  *pubsub.Client
 
+	subscription *pubsub.Subscription
+	msgsChan     chan *pubsub.Message
+	closeFunc    context.CancelFunc
+	subMut       sync.Mutex
+
 	log   log.Modular
 	stats metrics.Type
 }
 
 // newGCPCloudStorageInput creates a new Google Cloud Storage input type.
 func newGCPCloudStorageInput(conf input.GCPCloudStorageConfig, log log.Modular, stats metrics.Type) (*gcpCloudStorageInput, error) {
+	if conf.Bucket == "" && conf.PubSub.Subscription == "" {
+		return nil, errors.New("either a bucket or a pubsub.subscription must be specified")
+	}
+	if conf.Prefix != "" && conf.PubSub.Subscription != "" {
+		return nil, errors.New("cannot specify both a prefix and pubsub.subscription")
+	}
+	if conf.PubSub.Project == "" && conf.PubSub.Subscription != "" {
+		return nil, errors.New("pubsub.project must be specified with pubsub.subscription")
+	}
+
 	var objectScannerCtor codec.ReaderConstructor
 	var err error
 	if objectScannerCtor, err = codec.GetReader(conf.Codec, codec.NewReaderConfig()); err != nil {
@@ -241,17 +395,78 @@ func newGCPCloudStorageInput(conf input.GCPCloudStorageConfig, log log.Modular, 
 	return g, nil
 }
 
+func (g *gcpCloudStorageInput) getTargetReader(ctx context.Context) (gcpCloudStorageObjectTargetReader, error) {
+	if g.pubsubClient != nil {
+		return newPubsubTargetReader(g.conf, g.log, g.msgsChan), nil
+	}
+	return newGCPCloudStorageTargetReader(ctx, g.conf, g.log, g.storageClient.Bucket(g.conf.Bucket))
+}
+
 // Connect attempts to establish a connection to the target Google
-// Cloud Storage bucket.
+// Cloud Storage bucket and any relevant Pub/Sub subscription used to
+// traverse the objects.
 func (g *gcpCloudStorageInput) Connect(ctx context.Context) error {
 	var err error
+	// TODO: understand why is this a new context in original code?
 	g.storageClient, err = storage.NewClient(context.Background())
 	if err != nil {
 		return err
 	}
+	if g.conf.PubSub.Subscription != "" {
+		// TODO: Again, should this be a next context or should we use existing?
+		g.pubsubClient, err = pubsub.NewClient(context.Background(), g.conf.PubSub.Project)
+		if err != nil {
+			return err
+		}
 
-	g.keyReader, err = newGCPCloudStorageTargetReader(ctx, g.conf, g.log, g.storageClient.Bucket(g.conf.Bucket))
-	return err
+		g.subMut.Lock()
+		defer g.subMut.Unlock()
+		if g.subscription != nil {
+			return nil
+		}
+
+		sub := g.pubsubClient.Subscription(g.conf.PubSub.Subscription)
+
+		subCtx, cancel := context.WithCancel(context.Background())
+		msgsChan := make(chan *pubsub.Message, 1)
+
+		g.subscription = sub
+		g.msgsChan = msgsChan
+		g.closeFunc = cancel
+
+		go func() {
+			rerr := sub.Receive(subCtx, func(ctx context.Context, m *pubsub.Message) {
+				select {
+				case msgsChan <- m:
+				case <-ctx.Done():
+					if m != nil {
+						m.Nack()
+					}
+				}
+			})
+			if rerr != nil && rerr != context.Canceled {
+				g.log.Errorf("Subscription error: %v\n", rerr)
+			}
+			g.subMut.Lock()
+			g.subscription = nil
+			close(g.msgsChan)
+			g.msgsChan = nil
+			g.closeFunc = nil
+			g.subMut.Unlock()
+		}()
+	}
+	if g.keyReader, err = g.getTargetReader(ctx); err != nil {
+		g.pubsubClient = nil
+		g.storageClient = nil
+		return err
+	}
+
+	if g.conf.PubSub.Subscription == "" {
+		g.log.Infof("Downloading GCS objects from bucket: %s\n", g.conf.Bucket)
+	} else {
+		g.log.Infof("Downloading GCS objects found in messages from Pub/Sub subscription: %s\n", g.conf.PubSub.Subscription)
+	}
+	return nil
 }
 
 func (g *gcpCloudStorageInput) getObjectTarget(ctx context.Context) (*gcpCloudStoragePendingObject, error) {
@@ -372,6 +587,11 @@ func (g *gcpCloudStorageInput) Close(ctx context.Context) (err error) {
 	if err == nil && g.storageClient != nil {
 		err = g.storageClient.Close()
 		g.storageClient = nil
+	}
+
+	if err == nil && g.pubsubClient != nil {
+		err = g.pubsubClient.Close()
+		g.pubsubClient = nil
 	}
 	return
 }
