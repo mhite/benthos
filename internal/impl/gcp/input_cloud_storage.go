@@ -289,6 +289,8 @@ func (ps *pubsubTargetReader) parseObjectPath(pubsubMsgAttributes map[string]str
 	if eventType != "OBJECT_FINALIZE" {
 		return nil, errors.New("Not an OBJECT_FINALIZE eventType")
 	}
+	// TODO: GCS FUSE likes to touch a file and write to it. This creates two OBJECT_FINALIZE
+	// events, the first one with a 0 byte file. Figure out how to handle this.
 	bucketId, ok := pubsubMsgAttributes["bucketId"]
 	if !ok {
 		return nil, errors.New("Pub/Sub message missing bucketId attribute")
