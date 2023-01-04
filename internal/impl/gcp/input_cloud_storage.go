@@ -224,9 +224,10 @@ func (r gcpCloudStorageTargetReader) Close(context.Context) error {
 //------------------------------------------------------------------------------
 
 type pubsubTargetReader struct {
-	conf     input.GCPCloudStorageConfig
-	log      log.Modular
-	msgsChan chan *pubsub.Message
+	conf          input.GCPCloudStorageConfig
+	log           log.Modular
+	msgsChan      chan *pubsub.Message
+	storageClient *storage.Client
 
 	nextRequest time.Time
 
@@ -237,8 +238,9 @@ func newPubsubTargetReader(
 	conf input.GCPCloudStorageConfig,
 	log log.Modular,
 	msgsChan chan *pubsub.Message,
+	storageClient *storage.Client,
 ) *pubsubTargetReader {
-	return &pubsubTargetReader{conf: conf, log: log, msgsChan: msgsChan, nextRequest: time.Time{}, pending: nil}
+	return &pubsubTargetReader{conf: conf, log: log, msgsChan: msgsChan, storageClient: storageClient, nextRequest: time.Time{}, pending: nil}
 }
 
 func (ps *pubsubTargetReader) Pop(ctx context.Context) (*gcpCloudStorageObjectTarget, error) {
@@ -343,11 +345,9 @@ func (ps *pubsubTargetReader) readPubsubEvents(ctx context.Context) ([]*gcpCloud
 			ps.log.Errorf("Pub/Sub extract key error: %v\n", err)
 			continue
 		}
-		// pendingObjects = append(pendingObjects, newGCPCloudStorageObjectTarget(object.key, object.bucket, nil))
-		// TODO: fix nil to bucket handle; can't delete gcs objects untilt his gets fixed
 		pendingObjects = append(pendingObjects, newGCPCloudStorageObjectTarget(
 			object.key, object.bucket, deleteGCPCloudStorageObjectAckFn(
-				nil, object.key, ps.conf.DeleteObjects,
+				ps.storageClient.Bucket(object.bucket), object.key, ps.conf.DeleteObjects,
 				func(ctx context.Context, err error) (aerr error) {
 					if err != nil {
 						ps.log.Debugf("Abandoning Pub/Sub notification due to error: %v\n", err)
@@ -435,7 +435,7 @@ func newGCPCloudStorageInput(conf input.GCPCloudStorageConfig, log log.Modular, 
 
 func (g *gcpCloudStorageInput) getTargetReader(ctx context.Context) (gcpCloudStorageObjectTargetReader, error) {
 	if g.pubsubClient != nil {
-		return newPubsubTargetReader(g.conf, g.log, g.msgsChan), nil
+		return newPubsubTargetReader(g.conf, g.log, g.msgsChan, g.storageClient), nil
 	}
 	return newGCPCloudStorageTargetReader(ctx, g.conf, g.log, g.storageClient.Bucket(g.conf.Bucket))
 }
