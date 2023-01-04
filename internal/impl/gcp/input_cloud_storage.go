@@ -92,6 +92,7 @@ services. You can find out more [in this document](/docs/guides/cloud/gcp).`,
 			docs.FieldString("prefix", "An optional path prefix, if set only objects with the prefix are consumed."),
 			codec.ReaderDocs,
 			docs.FieldBool("delete_objects", "Whether to delete downloaded objects from the bucket once they are processed.").Advanced(),
+			docs.FieldInt("max_buffer", "The largest token size expected when consuming objects with a tokenised codec such as `lines`.").Advanced(),
 		).ChildDefaultAndTypesFromStruct(input.NewGCPCloudStorageConfig()),
 	})
 	if err != nil {
@@ -393,9 +394,11 @@ func newGCPCloudStorageInput(conf input.GCPCloudStorageConfig, log log.Modular, 
 		return nil, errors.New("pubsub.project must be specified with pubsub.subscription")
 	}
 
-	var objectScannerCtor codec.ReaderConstructor
-	var err error
-	if objectScannerCtor, err = codec.GetReader(conf.Codec, codec.NewReaderConfig()); err != nil {
+	readerConfig := codec.NewReaderConfig()
+	readerConfig.MaxScanTokenSize = conf.MaxBuffer
+
+	objectScannerCtor, err := codec.GetReader(conf.Codec, readerConfig)
+	if err != nil {
 		return nil, fmt.Errorf("invalid google cloud storage codec: %v", err)
 	}
 

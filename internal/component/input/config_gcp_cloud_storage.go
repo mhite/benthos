@@ -26,6 +26,7 @@ type GCPCloudStorageConfig struct {
 	Bucket        string             `json:"bucket" yaml:"bucket"`
 	Prefix        string             `json:"prefix" yaml:"prefix"`
 	Codec         string             `json:"codec" yaml:"codec"`
+	MaxBuffer     int                `json:"max_buffer" yaml:"max_buffer"`
 	DeleteObjects bool               `json:"delete_objects" yaml:"delete_objects"`
 	PubSub        GCPGCSPubSubConfig `json:"pubsub" yaml:"pubsub"`
 }

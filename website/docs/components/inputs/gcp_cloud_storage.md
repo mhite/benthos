@@ -65,6 +65,7 @@ input:
     prefix: ""
     codec: all-bytes
     delete_objects: false
+    max_buffer: 0
 ```
 
 </TabItem>
@@ -211,5 +212,13 @@ Whether to delete downloaded objects from the bucket once they are processed.
 
 Type: `bool`  
 Default: `false`  
+
+### `max_buffer`
+
+The largest token size expected when consuming objects with a tokenised codec such as `lines`.
+
+
+Type: `int`  
+Default: `0`  
 
 
