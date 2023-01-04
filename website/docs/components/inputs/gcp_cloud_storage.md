@@ -65,7 +65,7 @@ input:
     prefix: ""
     codec: all-bytes
     delete_objects: false
-    max_buffer: 0
+    max_buffer: 1000000
 ```
 
 </TabItem>
@@ -219,6 +219,6 @@ The largest token size expected when consuming objects with a tokenised codec su
 
 
 Type: `int`  
-Default: `0`  
+Default: `1000000`  
 
 
