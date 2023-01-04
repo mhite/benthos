@@ -296,26 +296,26 @@ func (ps *pubsubTargetReader) Close(ctx context.Context) error {
 func (ps *pubsubTargetReader) parseObjectPath(pubsubMsgAttributes map[string]string) (*gcpCloudStorageObjectTarget, error) {
 	eventType, ok := pubsubMsgAttributes["eventType"]
 	if !ok {
-		return nil, errors.New("Pub/Sub message missing eventType attribute")
+		return nil, errors.New("pub/sub message missing eventType attribute")
 	}
 	if eventType != "OBJECT_FINALIZE" {
-		return nil, errors.New("Not an OBJECT_FINALIZE eventType")
+		return nil, errors.New("not an \"OBJECT_FINALIZE\" eventType")
 	}
 	// TODO: GCS FUSE likes to touch a file and write to it. This creates two OBJECT_FINALIZE
 	// events, the first one with a 0 byte file. Figure out how to handle this.
 	// I think maybe S3 input handles similar with sqs.delay_period feature?
-	bucketId, ok := pubsubMsgAttributes["bucketId"]
+	bucket, ok := pubsubMsgAttributes["bucketId"]
 	if !ok {
-		return nil, errors.New("Pub/Sub message missing bucketId attribute")
+		return nil, errors.New("pub/sub message missing bucketId attribute")
 	}
-	objectId, ok := pubsubMsgAttributes["objectId"]
+	key, ok := pubsubMsgAttributes["objectId"]
 	if !ok {
-		return nil, errors.New("Pub/Sub message missing objectId attribute")
+		return nil, errors.New("pub/sub message missing objectId attribute")
 	}
 
 	return &gcpCloudStorageObjectTarget{
-		bucket: bucketId,
-		key:    objectId,
+		bucket: bucket,
+		key:    key,
 	}, nil
 }
 
@@ -430,7 +430,7 @@ func (g *gcpCloudStorageInput) Connect(ctx context.Context) error {
 		return err
 	}
 	if g.conf.PubSub.Subscription != "" {
-		// TODO: Again, should this be a next context or should we use existing?
+		// TODO: Again, should this be a new context or should we use existing?
 		g.pubsubClient, err = pubsub.NewClient(context.Background(), g.conf.PubSub.Project)
 		if err != nil {
 			return err
