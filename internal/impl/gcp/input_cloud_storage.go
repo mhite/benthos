@@ -515,8 +515,11 @@ func (g *gcpCloudStorageInput) getObjectTarget(ctx context.Context) (*gcpCloudSt
 		return nil, err
 	}
 
-	objReference := g.storageClient.Bucket(g.conf.Bucket).Object(target.key)
+	// TODO: make sure the gcs object lister stores the bucket in the new target bucket attribute rather than
+	// assuming we'd get it from config right here (previous behavior)
+	objReference := g.storageClient.Bucket(target.bucket).Object(target.key)
 
+	// TODO: why are we acknowledging every target that throws an error?
 	objAttributes, err := objReference.Attrs(ctx)
 	if err != nil {
 		_ = target.ackFn(ctx, err)
@@ -534,10 +537,17 @@ func (g *gcpCloudStorageInput) getObjectTarget(ctx context.Context) (*gcpCloudSt
 		obj:    objAttributes,
 	}
 	if object.scanner, err = g.objectScannerCtor(target.key, objReader, target.ackFn); err != nil {
+		// TODO: EOF check copied from input_s3 logic... keep?
+		// Warning: NEVER return io.EOF from a scanner constructor, as this will
+		// falsely indicate that we've reached the end of our list of object
+		// targets when running a Pub/Sub feed.
+		if errors.Is(err, io.EOF) {
+			err = fmt.Errorf("encountered an empty file for key '%v'", target.key)
+		}
 		_ = target.ackFn(ctx, err)
 		return nil, err
 	}
-
+	// TODO: Why aren't we using the object mutex around this?
 	g.object = object
 	return object, nil
 }
