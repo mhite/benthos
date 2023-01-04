@@ -364,15 +364,15 @@ func (ps *pubsubTargetReader) readPubsubEvents(ctx context.Context) ([]*gcpCloud
 }
 
 func (ps *pubsubTargetReader) nackPubsubMessage(ctx context.Context, msg *pubsub.Message) error {
-	// _, err := msg.NackWithResult().Get(ctx)
-	// return err
+
+	msg.Nack()
 	ps.log.Debugln("nack msg")
 	return nil
 }
 
 func (ps *pubsubTargetReader) ackPubsubMessage(ctx context.Context, msg *pubsub.Message) error {
-	// _, err := msg.AckWithResult().Get(ctx)
-	// return err
+
+	msg.Ack()
 	ps.log.Debugln("ack msg")
 	return nil
 }
