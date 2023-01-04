@@ -242,7 +242,6 @@ func newPubsubTargetReader(
 }
 
 func (ps *pubsubTargetReader) Pop(ctx context.Context) (*gcpCloudStorageObjectTarget, error) {
-	// TODO: figure out what "t" stands for -- is it "evenT?"
 	// we've got some events to pop off the stack, let's do one
 	if len(ps.pending) > 0 {
 		t := ps.pending[0]
@@ -284,6 +283,7 @@ func (ps *pubsubTargetReader) Pop(ctx context.Context) (*gcpCloudStorageObjectTa
 
 func (ps *pubsubTargetReader) Close(ctx context.Context) error {
 	// TODO: figure out -- I think this tries to NACK pending items?
+	// ie. when you call ackFn with err != nil, it nacks msgs
 	var err error
 	for _, p := range ps.pending {
 		if aerr := p.ackFn(ctx, errors.New("service shutting down")); aerr != nil {
@@ -328,6 +328,11 @@ func (ps *pubsubTargetReader) readPubsubEvents(ctx context.Context) ([]*gcpCloud
 	default:
 	}
 
+	// TODO: Currently just picks up a single message
+	// maybe we should use a larger buffer channel, drop in and check the length of the channel
+	// and drain it? Or maybe we select on the channel until maxmessages accumulated with
+	// a default case of break?
+
 	var pendingObjects []*gcpCloudStorageObjectTarget
 
 	// Discard any Pub/Sub messages not associated with a target file.
@@ -338,23 +343,38 @@ func (ps *pubsubTargetReader) readPubsubEvents(ctx context.Context) ([]*gcpCloud
 			ps.log.Errorf("Pub/Sub extract key error: %v\n", err)
 			continue
 		}
-		// TODO: figure out why are we using int32 specifically?
-		pendingObjects = append(pendingObjects, newGCPCloudStorageObjectTarget(object.key, object.bucket, nil))
+		// pendingObjects = append(pendingObjects, newGCPCloudStorageObjectTarget(object.key, object.bucket, nil))
+		// TODO: fix nil to bucket handle; can't delete gcs objects untilt his gets fixed
+		pendingObjects = append(pendingObjects, newGCPCloudStorageObjectTarget(
+			object.key, object.bucket, deleteGCPCloudStorageObjectAckFn(
+				nil, object.key, ps.conf.DeleteObjects,
+				func(ctx context.Context, err error) (aerr error) {
+					if err != nil {
+						ps.log.Debugf("Abandoning Pub/Sub notification due to error: %v\n", err)
+						aerr = ps.nackPubsubMessage(ctx, pubsubMsg)
+					} else {
+						aerr = ps.ackPubsubMessage(ctx, pubsubMsg)
+					}
+					return
+				},
+			)))
 	}
 
 	return pendingObjects, nil
 }
 
 func (ps *pubsubTargetReader) nackPubsubMessage(ctx context.Context, msg *pubsub.Message) error {
-	_, err := msg.NackWithResult().Get(ctx)
-	// TODO: debug log the result?
-	return err
+	// _, err := msg.NackWithResult().Get(ctx)
+	// return err
+	ps.log.Debugln("nack msg")
+	return nil
 }
 
 func (ps *pubsubTargetReader) ackPubsubMessage(ctx context.Context, msg *pubsub.Message) error {
-	_, err := msg.AckWithResult().Get(ctx)
-	// TODO: debug log the result?
-	return err
+	// _, err := msg.AckWithResult().Get(ctx)
+	// return err
+	ps.log.Debugln("ack msg")
+	return nil
 }
 
 //------------------------------------------------------------------------------
@@ -376,7 +396,8 @@ type gcpCloudStorageInput struct {
 	subscription *pubsub.Subscription
 	msgsChan     chan *pubsub.Message
 	closeFunc    context.CancelFunc
-	subMut       sync.Mutex
+	// TODO: additional mutex, or use the existing object one?
+	subMut sync.Mutex
 
 	log   log.Modular
 	stats metrics.Type

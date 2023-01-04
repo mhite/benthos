@@ -35,7 +35,8 @@ type GCPCloudStorageConfig struct {
 // values.
 func NewGCPCloudStorageConfig() GCPCloudStorageConfig {
 	return GCPCloudStorageConfig{
-		Codec:  "all-bytes",
-		PubSub: NewGCPGCSPubSubConfig(),
+		Codec:     "all-bytes",
+		MaxBuffer: 1000000,
+		PubSub:    NewGCPGCSPubSubConfig(),
 	}
 }
